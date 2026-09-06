@@ -8,7 +8,7 @@ def generate_otp_code():
 
 def send_otp_sms(phone_number, code):
     try:
-        api = KavenegarAPI('6D4B7557415A7974556D37755977535830755A72476250327035484E674147634C586F376F544B56684E343D')  # جایگزین کردن با کلید API خود
+        api = KavenegarAPI(settings.KAVENEGAR_API_KEY)  # جایگزین کردن با کلید API خود
         params = {
             'receptor': phone_number,
             'template': 'goldestone', # نام قالبی که در پنل کاوه نگار تایید کرده‌اید

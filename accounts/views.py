@@ -3,6 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from accounts.throttles import OTPRateThrottle
 from .models import User, OTP
 from .serializers import SendOTPSerializer, VerifyOTPSerializer,ResetPasswordSerializer,ChangePasswordSerializer
 from .services import generate_otp_code, send_otp_sms
@@ -10,19 +12,16 @@ from rest_framework.permissions import IsAuthenticated
 
 
 class SendOTPView(APIView):
+    throttle_classes = [OTPRateThrottle]
     def post(self, request):
         serializer = SendOTPSerializer(data=request.data)
         if serializer.is_valid():
             phone_number = serializer.validated_data['phone_number']
             
             code = generate_otp_code()
-            # ذخیره در دیتابیس (حذف کدهای قبلی این شماره برای جلوگیری از اسپم)
             OTP.objects.filter(phone_number=phone_number).delete()
             OTP.objects.create(phone_number=phone_number, code=code)
 
-            # ارسال پیامک
-            # برای محیط توسعه (Development) می‌توانید کامنت کنید و کد را در کنسول پرینت بگیرید
-            # print(f"OTP Code for {phone_number} is {code}")
             sms_sent = send_otp_sms(phone_number, code)
             
             if sms_sent:
@@ -30,7 +29,6 @@ class SendOTPView(APIView):
             return Response({'error': 'خطا در ارسال پیامک'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class VerifyOTPView(APIView):
     def post(self, request):

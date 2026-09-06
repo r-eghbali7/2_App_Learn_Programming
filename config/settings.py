@@ -10,9 +10,11 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
-
+from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
+load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -20,17 +22,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-biw)2_^_+#&xwv85*7#@yojg1@eg!^hlfofr0j@z@_0fvs0f*b'
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'corsheaders',  # این خط اضافه شود
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -38,7 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     
-    #Local App
+    # Local Apps
     "accounts",
     "courses",
     "articles",
@@ -46,11 +49,11 @@ INSTALLED_APPS = [
     "subscriptions",
     "practices",
     "core",
-    
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # این خط حتما اینجا اضافه شود
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -125,6 +128,17 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATICFILES_DIRS = [BASE_DIR / "static",]
+# STATIC_ROOT = os.path.join(BASE_DIR, '../public_html/static')
+
+# ==========================================
+# Media Files Settings (Uploads & Images)
+# ==========================================
+# آدرسی که در مرورگر برای دیدن فایل‌ها استفاده می‌شود (مثلا /media/courses/img.jpg)
+MEDIA_URL = '/media/'
+
+# مسیری در سرور یا کامپیوتر شما که فایل‌ها فیزیکاً آنجا ذخیره می‌شوند
+MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Email
@@ -144,6 +158,19 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle'
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '3/minute',
+        'user': '10/minute',
+        'otp': '1/minute',
+    },
+    
+    # === تنظیمات صفحه‌بندی (Pagination) ===
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10, # در هر درخواست فقط 10 رکورد ارسال می‌شود
 }
 
 # (اختیاری) تنظیمات مربوط به عمر توکن‌ها
@@ -153,3 +180,22 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=30), # اعتبار رفرش توکن (مثلاً ۳۰ روز)
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+# ==========================================
+# CORS Settings
+# ==========================================
+# اجازه دادن به تمام دامنه‌ها برای درخواست (مناسب برای محیط توسعه و تست فلاتر)
+CORS_ALLOW_ALL_ORIGINS = True
+
+# نکته: برای نسخه نهایی (Production) بهتر است به جای خط بالا، دامنه‌های مجاز را لیست کنید:
+# CORS_ALLOW_ALL_ORIGINS = False
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:8000",
+#     "http://127.0.0.1:8000",
+#     "https://your-flutter-web-domain.com",
+# ]
+
+KAVENEGAR_API_KEY = os.environ.get('KAVENEGAR_API_KEY')
+
+# در فایل config/settings.py
+ZARINPAL_MERCHANT_ID = os.environ.get('ZARINPAL_MERCHANT_ID', '00000000-0000-0000-0000-000000000000')
