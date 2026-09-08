@@ -3,13 +3,67 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import authenticate # این خط را به بالای فایل اضافه کنید
 
 from accounts.throttles import OTPRateThrottle
 from .models import User, OTP
 from .serializers import SendOTPSerializer, VerifyOTPSerializer,ResetPasswordSerializer,ChangePasswordSerializer
 from .services import generate_otp_code, send_otp_sms
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
+
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        phone_number = request.data.get('phone_number')
+        password = request.data.get('password')
+        full_name = request.data.get('full_name', '')
+
+        if not phone_number or not password:
+            return Response({'error': 'شماره موبایل و رمز عبور الزامی است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(phone_number=phone_number).exists():
+            return Response({'error': 'کاربری با این شماره قبلا ثبت‌نام کرده است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ساخت کاربر جدید
+        user = User.objects.create_user(phone_number=phone_number, password=password, full_name=full_name)
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            'message': 'ثبت‌نام موفقیت‌آمیز بود.',
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+        }, status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        phone_number = request.data.get('phone_number')
+        password = request.data.get('password')
+
+        if not phone_number or not password:
+            return Response({'error': 'شماره موبایل و رمز عبور الزامی است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # روش جایگزین و بسیار مطمئن به جای استفاده از authenticate
+        user = User.objects.filter(phone_number=phone_number).first()
+
+        # بررسی وجود کاربر و همچنین بررسی هش رمز عبور
+        if user and user.check_password(password):
+            if not user.is_active:
+                return Response({'error': 'حساب کاربری شما مسدود شده است.'}, status=status.HTTP_403_FORBIDDEN)
+            
+            # تولید توکن
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'message': 'ورود موفقیت‌آمیز بود.',
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({'error': 'شماره موبایل یا رمز عبور اشتباه است.'}, status=status.HTTP_401_UNAUTHORIZED)
 
 class SendOTPView(APIView):
     throttle_classes = [OTPRateThrottle]

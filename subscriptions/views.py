@@ -1,16 +1,21 @@
 import requests
-import json
-from django.conf import settings
-from django.urls import reverse
-from django.http import HttpResponseRedirect, HttpResponse
-from rest_framework import viewsets, status
+
+from django.shortcuts import redirect
+
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.generics import ListAPIView
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.views import APIView
 
-from .models import Plan, UserSubscription, Transaction
-from .serializers import PlanSerializer, UserSubscriptionSerializer
+from .models import Plan, Transaction, UserSubscription
+from .serializers import (
+    PlanSerializer,
+    TransactionSerializer,
+    UserSubscriptionSerializer,
+)
+
 
 class PlanViewSet(viewsets.ReadOnlyModelViewSet):
     """نمایش لیست پلن‌های اشتراک (برای صفحه خرید)"""
@@ -47,112 +52,132 @@ class MySubscriptionViewSet(viewsets.ViewSet):
 
 
 class PaymentRequestView(APIView):
-    """
-    مرحله اول: ایجاد تراکنش و دریافت لینک درگاه پرداخت
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        plan_id = request.data.get('plan_id')
         try:
-            plan = Plan.objects.get(id=plan_id, is_active=True)
-        except Plan.DoesNotExist:
-            return Response({'error': 'پلن یافت نشد.'}, status=status.HTTP_404_NOT_FOUND)
-
-        amount_toman = plan.price
-        amount_rial = amount_toman * 10  # زرین‌پال مبالغ را به ریال دریافت می‌کند
-
-        # آدرس کال‌بک (بازگشت از درگاه)
-        # در سرور واقعی، دامنه سایت خودتان را جایگزین 127.0.0.1 کنید
-        callback_url = "http://127.0.0.1:8000" + reverse('verify-payment')
-
-        data = {
-            "merchant_id": settings.ZARINPAL_MERCHANT_ID,
-            "amount": amount_rial,
-            "callback_url": callback_url,
-            "description": f"خرید اشتراک {plan.title} برای {request.user.phone_number}",
-            "metadata": {"mobile": request.user.phone_number}
-        }
-        
-        headers = {'content-type': 'application/json', 'accept': 'application/json'}
-        
-        try:
-            req = requests.post('https://api.zarinpal.com/pg/v4/payment/request.json', data=json.dumps(data), headers=headers)
-            res = req.json()
+            print("DATA RECEIVED:", request.data)
+            plan_id = request.data.get('plan_id')
             
-            if len(res['errors']) == 0:
-                authority = res['data']['authority']
-                
-                # ثبت تراکنش در دیتابیس در حالت پرداخت نشده (Pending)
-                Transaction.objects.create(
-                    user=request.user,
-                    plan=plan,
-                    amount=amount_toman,
-                    authority=authority
-                )
-                
-                payment_url = f"https://www.zarinpal.com/pg/StartPay/{authority}"
-                return Response({'payment_url': payment_url}, status=status.HTTP_200_OK)
-            else:
-                return Response({'error': res['errors']}, status=status.HTTP_400_BAD_REQUEST)
-                
-        except requests.exceptions.Timeout:
-            return Response({'error': 'Timeout'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        except requests.exceptions.ConnectionError:
-            return Response({'error': 'Connection Error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            if not plan_id:
+                return Response({"error": "شناسه پلن ارسال نشده است."}, status=status.HTTP_400_BAD_REQUEST)
 
+            try:
+                plan = Plan.objects.get(id=plan_id)
+            except Plan.DoesNotExist:
+                print(f"Plan with id {plan_id} does not exist.")
+                return Response({"error": "پلن مورد نظر یافت نشد."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # مبلغ به ریال
+            amount_in_rials = int(plan.price) * 10 
+
+            payload = {
+                "merchant_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                "amount": amount_in_rials,
+                "callback_url": "http://127.0.0.1:8000/api/subscriptions/verify-payment/",
+                "description": f"خرید اشتراک {plan.title}",
+                "metadata": {
+                    "mobile": str(request.user.phone_number),
+                }
+            }
+
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+
+            response = requests.post(
+                'https://payment.zarinpal.com/pg/v4/payment/request.json',
+                json=payload,
+                headers=headers,
+                timeout=10
+            )
+            res_data = response.json()
+            print("ZARINPAL RESPONSE:", res_data)
+
+            data = res_data.get('data', {})
+            code = data.get('code')
+
+            if code == 100:
+                authority = data.get('authority')
+                payment_url = f"https://payment.zarinpal.com/pg/StartPay/{authority}"
+                return Response({"payment_url": payment_url}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "خطا از سمت درگاه زرین‌پال", "details": res_data}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            print("CRITICAL PAYMENT ERROR:", str(e))
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# subscriptions/views.py (ادامه)
+from django.shortcuts import redirect
 
 class PaymentVerifyView(APIView):
-    """
-    مرحله دوم: بازگشت کاربر از درگاه و بررسی وضعیت پرداخت
-    """
-    permission_classes = [AllowAny] # چون کاربر از سمت زرین‌پال برمی‌گردد، هدر احراز هویت ندارد
+    permission_classes = [] # چون از درگاه برمی‌گردد معمولا دسترسی عمومی دارد اما با authority چک می‌شود
 
     def get(self, request):
         authority = request.GET.get('Authority')
-        payment_status = request.GET.get('Status')
-
-        if payment_status != 'OK':
-            return HttpResponse("<b>پرداخت ناموفق بود یا توسط شما لغو شد.</b><br><a href='codeglass://app'>بازگشت به اپلیکیشن</a>")
+        status_val = request.GET.get('Status')
 
         try:
-            transaction = Transaction.objects.get(authority=authority, is_paid=False)
+            transaction = Transaction.objects.get(authority=authority)
         except Transaction.DoesNotExist:
-            return HttpResponse("<b>تراکنش یافت نشد یا قبلاً تایید شده است.</b>")
+            return Response({"error": "تراکنش یافت نشد."}, status=status.HTTP_404_NOT_FOUND)
 
-        amount_rial = transaction.amount * 10
-        data = {
-            "merchant_id": settings.ZARINPAL_MERCHANT_ID,
-            "amount": amount_rial,
+        if status_val != 'OK':
+            transaction.status = 'failed'
+            transaction.save()
+            # ریدایرکت به اپلیکیشن فلاتر با دیپ‌لینک خطا
+            return redirect("codeglass://payment-success?status=NOK")
+
+        # اطلاعات برای متد Verify بر اساس مستندات v4
+        payload = {
+            "merchant_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+            "amount": int(transaction.amount) * 10,
             "authority": authority
         }
-        headers = {'content-type': 'application/json', 'accept': 'application/json'}
 
-        try:
-            req = requests.post('https://api.zarinpal.com/pg/v4/payment/verify.json', data=json.dumps(data), headers=headers)
-            res = req.json()
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
 
-            if len(res['errors']) == 0:
-                code = res['data']['code']
-                if code == 100 or code == 101: # 100: موفق، 101: قبلا وریفای شده
-                    # ۱. تراکنش را موفق ثبت می‌کنیم
-                    transaction.is_paid = True
-                    transaction.ref_id = str(res['data']['ref_id'])
-                    transaction.save()
+        response = requests.post(
+            'https://payment.zarinpal.com/pg/v4/payment/verify.json',
+            json=payload,
+            headers=headers
+        )
+        res_data = response.json()
+        data = res_data.get('data', {})
+        code = data.get('code')
 
-                    # ۲. غیرفعال کردن اشتراک‌های قبلی کاربر
-                    UserSubscription.objects.filter(user=transaction.user, is_active=True).update(is_active=False)
-                    
-                    # ۳. فعال کردن اشتراک جدید
-                    UserSubscription.objects.create(user=transaction.user, plan=transaction.plan)
+        # کد 100 یا 101 به معنی موفق بودن تراکنش است (طبق مستندات مهم زرین‌پال)
+        if code in [100, 101]:
+            ref_id = data.get('ref_id')
+            
+            transaction.status = 'success'
+            transaction.ref_id = str(ref_id)
+            transaction.save()
 
-                    # هدایت کاربر به اپلیکیشن از طریق Deep Link
-                    # کلمه codeglass:// باید در تنظیمات AndroidManifest فلاتر ست شود
-                    return HttpResponseRedirect(f"codeglass://payment-success?ref_id={transaction.ref_id}")
-                else:
-                    return HttpResponse(f"<b>تراکنش ناموفق بود. کد خطا: {code}</b>")
-            else:
-                return HttpResponse(f"<b>تراکنش ناموفق بود. خطا: {res['errors']}</b>")
+            # فعال کردن اشتراک برای کاربر
+            user = transaction.user
+            user.is_pro = True
+            user.save()
 
-        except Exception as e:
-            return HttpResponse("<b>خطا در ارتباط با سرور زرین‌پال.</b>")
+            # ریدایرکت به دیپ‌لینک فلاتر همراه با کد پیگیری (Ref ID)
+            return redirect(f"codeglass://payment-success?ref_id={ref_id}")
+        else:
+            transaction.status = 'failed'
+            transaction.save()
+            return redirect("codeglass://payment-success?status=NOK")
+
+
+
+class UserPurchasesView(ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = TransactionSerializer
+
+    def get_queryset(self):
+        # فقط خریدهای همین کاربر لاگین‌شده را برمی‌گرداند
+        return Transaction.objects.filter(user=self.request.user).order_by('-created_at')

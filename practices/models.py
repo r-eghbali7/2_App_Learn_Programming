@@ -5,6 +5,10 @@ class Exercise(models.Model):
     title = models.CharField(max_length=255, verbose_name="عنوان تمرین")
     description = models.TextField(verbose_name="صورت مسئله")
     starter_code = models.TextField(blank=True, null=True, verbose_name="کد اولیه (استارتر)")
+    
+    # === این فیلد اضافه شود ===
+    language = models.CharField(max_length=50, default='Python', verbose_name="زبان برنامه‌نویسی")
+    
     is_active = models.BooleanField(default=True)
 
     def __str__(self):

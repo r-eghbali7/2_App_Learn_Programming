@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Course, Lesson, UserProgress, UserNote
+from .models import Course, Lesson, UserProgress, UserNote, Certificate
 
 class LessonInline(admin.StackedInline):
     model = Lesson
@@ -22,3 +22,11 @@ class UserProgressAdmin(admin.ModelAdmin):
 class UserNoteAdmin(admin.ModelAdmin):
     list_display = ['user', 'lesson', 'updated_at']
     search_fields = ['user__phone_number', 'lesson__title']
+
+# === بخش مدیریت گواهینامه‌ها ===
+@admin.register(Certificate)
+class CertificateAdmin(admin.ModelAdmin):
+    list_display = ['cert_id', 'user', 'course', 'issued_at']
+    list_filter = ['course', 'issued_at']
+    search_fields = ['cert_id', 'user__phone_number', 'user__full_name', 'course__title']
+    readonly_fields = ['cert_id', 'issued_at'] # شماره گواهینامه و تاریخ صدور نباید دستی عوض شوند

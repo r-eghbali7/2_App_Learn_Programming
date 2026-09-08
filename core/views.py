@@ -1,14 +1,17 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework import status
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAuthenticatedOrReadOnly
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from .models import Banner
-from .serializers import UserProfileSerializer
+from articles.models import Article
+from articles.serializers import ArticleListSerializer, Article
+
 from courses.models import Course
 from courses.serializers import CourseListSerializer
-from articles.models import Article
-from articles.serializers import ArticleListSerializer
+
+from .models import Banner
+from .serializers import BannerSerializer, UserProfileSerializer
+
 
 class HomeDashboardView(APIView):
     permission_classes = [AllowAny]

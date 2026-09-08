@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Course, Lesson, UserProgress, UserNote
+from .models import Certificate, Course, Lesson, UserProgress, UserNote
 
 # سریالایزرهای قبلی (بدون تغییر باقی می‌مانند)
 class UserNoteSerializer(serializers.ModelSerializer):
@@ -120,3 +120,10 @@ class MyCourseSerializer(serializers.ModelSerializer):
     def get_is_completed(self, obj):
         completed, total = self._calculate_progress(obj)
         return total > 0 and completed == total
+
+class CertificateSerializer(serializers.ModelSerializer):
+    course_title = serializers.CharField(source='course.title', read_only=True)
+    
+    class Meta:
+        model = Certificate
+        fields = ['id', 'cert_id', 'course_title', 'issued_at', 'image']

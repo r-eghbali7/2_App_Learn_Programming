@@ -4,18 +4,25 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
-from .models import Course, Lesson, UserProgress, UserNote
-from .serializers import CourseListSerializer, CourseDetailSerializer, MyCourseSerializer, UserNoteSerializer
+from rest_framework.filters import SearchFilter # === این خط اضافه شد ===
+
+from .models import Certificate, Course, Lesson, UserProgress, UserNote
+from .serializers import CertificateSerializer, CourseListSerializer, CourseDetailSerializer, MyCourseSerializer, UserNoteSerializer
 
 
 class CourseViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticatedOrReadOnly]
 
+    # تعیین سریالایزر پیش‌فرض برای جلوگیری از ارور AssertionError
+    serializer_class = CourseListSerializer
+    filter_backends = [SearchFilter]
+    search_fields = ['title', 'instructor', 'description']
+
+    
     def get_queryset(self):
         user = self.request.user
         queryset = Course.objects.filter(is_active=True)
 
-        # بهینه‌سازی (حل N+1): برای حالت تکی (Detail)
         if self.action == 'retrieve' and user.is_authenticated:
             lessons_prefetch = Prefetch(
                 'lessons',
@@ -34,45 +41,52 @@ class CourseViewSet(viewsets.ReadOnlyModelViewSet):
             )
             return queryset.prefetch_related(lessons_prefetch)
         
-        # برای حالت لیست معمولی
         return queryset.prefetch_related('lessons')
 
-    # ==========================================
-    # اندپوینت جدید: api/courses/list/my-courses/
-    # ==========================================
-    @action(detail=False, methods=['get'], url_path='my-courses', permission_classes=[IsAuthenticated])
-    def my_courses(self, request):
+    @action(detail=True, methods=['get'], url_path='certificate')
+    def get_certificate(self, request, pk=None):
         user = request.user
-        
-        # ۱. ابتدا پیدا می‌کنیم کاربر چه دوره‌هایی را شروع کرده است
-        # کاربر هر دوره‌ای که حداقل یک `UserProgress` در جلساتش داشته باشد را شروع کرده است.
-        # (اگر سیستم ثبت نام / خرید دوره مجزا دارید، می‌توانید از آن جدول فیلتر کنید)
-        started_course_ids = UserProgress.objects.filter(
-            user=user
-        ).values_list('lesson__course_id', flat=True).distinct()
+        course = self.get_object()
 
-        # ۲. دوره‌ها را فیلتر کرده و با Prefetch بهینه‌سازی می‌کنیم
-        lessons_prefetch = Prefetch(
-            'lessons',
-            queryset=Lesson.objects.prefetch_related(
-                Prefetch(
-                    'completed_by', 
-                    queryset=UserProgress.objects.filter(user=user, is_completed=True), 
-                    to_attr='user_progress'
-                )
-            )
-        )
+        # بررسی اینکه آیا کاربر ۱۰۰٪ دوره را گذرانده؟
+        total_lessons = course.lessons.count()
+        if total_lessons == 0:
+            return Response({'error': 'این دوره هنوز جلسه‌ای ندارد.'}, status=400)
+            
+        completed = UserProgress.objects.filter(user=user, lesson__course=course, is_completed=True).count()
         
-        # دوره‌های پیدا شده را می‌گیریم و دیتای جلساتش را برای محاسبه پیشرفت، از قبل بارگذاری (Preload) می‌کنیم
-        courses = Course.objects.filter(
-            id__in=started_course_ids, 
-            is_active=True
-        ).prefetch_related(lessons_prefetch)
+        if completed < total_lessons:
+            return Response({'error': 'برای دریافت گواهینامه باید دوره را به اتمام برسانید.'}, status=403)
 
-        # ۳. پاس دادن به سریالایزر جدید
-        serializer = MyCourseSerializer(courses, many=True, context={'request': request})
+        # اگر قبلا مدرک ساخته شده، همان را برگردان
+        cert, created = Certificate.objects.get_or_create(user=user, course=course)
+        
+        if created or not cert.image:
+            # ساخت عکس جدید
+            user_name = user.full_name if user.full_name else "کاربر عزیز"
+            issue_date = convert_to_shamsi(cert.issued_at)
+            generate_certificate_image(cert, user_name, course.title, issue_date)
+
+        cert_url = request.build_absolute_uri(cert.image.url)
+        return Response({
+            'status': 'success',
+            'certificate_id': cert.cert_id,
+            'download_url': cert_url
+        }, status=status.HTTP_200_OK)
+
+    # courses/views.py
+
+    @action(detail=False, methods=['get'], url_path='my-certificates', permission_classes=[IsAuthenticated])
+    def my_certificates(self, request):
+        # فقط مدارکی که عکس آن‌ها با موفقیت تولید و ذخیره شده را برمی‌گردانیم
+        certificates = Certificate.objects.filter(user=request.user).exclude(image='').order_by('-issued_at')
+        serializer = CertificateSerializer(certificates, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
-
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return CourseListSerializer
+        return CourseDetailSerializer
 
 class LessonActionViewSet(viewsets.ViewSet):
     """

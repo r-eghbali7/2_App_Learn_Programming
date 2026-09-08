@@ -103,3 +103,9 @@ class SubmissionViewSet(viewsets.ModelViewSet):
 
         # ذخیره نهایی وضعیت اجرای کد در دیتابیس
         submission.save()
+
+    def create(self, request, *args, **kwargs):
+            serializer = self.get_serializer(data=request.data)
+            if not serializer.is_valid():
+                print("DIAGNOSTIC ERROR ->", serializer.errors) # چاپ خطای دقیق در ترمینال
+            return super().create(request, *args, **kwargs)

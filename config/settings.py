@@ -154,6 +154,8 @@ MAILERS = {
 AUTH_USER_MODEL = 'accounts.User'
 
 # تنظیمات Django REST Framework
+# config/settings.py
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -163,14 +165,13 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle'
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '3/minute',
-        'user': '10/minute',
-        'otp': '1/minute',
+        'anon': '60/minute',    # افزایش به ۶۰ درخواست در دقیقه برای مهمان‌ها
+        'user': '120/minute',   # افزایش به ۱۲۰ درخواست در دقیقه برای کاربران سایت
+        'otp': '3/minute',      # جلوگیری از ارسال اسپم پیامک (همین مقدار مناسب است)
     },
     
-    # === تنظیمات صفحه‌بندی (Pagination) ===
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 10, # در هر درخواست فقط 10 رکورد ارسال می‌شود
+    'PAGE_SIZE': 10,
 }
 
 # (اختیاری) تنظیمات مربوط به عمر توکن‌ها
