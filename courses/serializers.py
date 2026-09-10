@@ -1,11 +1,13 @@
+# courses/serializers.py
 from rest_framework import serializers
-from .models import Certificate, Course, Lesson, UserProgress, UserNote
+from .models import Certificate, Course, Chapter, Lesson, UserProgress, UserNote, Quiz, CourseEnrollment
 
-# سریالایزرهای قبلی (بدون تغییر باقی می‌مانند)
+
 class UserNoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserNote
         fields = ['id', 'text', 'updated_at']
+
 
 class LessonSerializer(serializers.ModelSerializer):
     is_completed = serializers.SerializerMethodField()
@@ -13,62 +15,93 @@ class LessonSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Lesson
-        fields = ['id', 'title', 'content', 'video_url', 'order', 'is_completed', 'user_note']
+        fields = ['id', 'title', 'content', 'video_url', 'duration_minutes', 'order', 'is_free_preview', 'is_completed', 'user_note']
 
     def get_is_completed(self, obj):
-        user = self.context['request'].user
-        if user.is_authenticated:
+        user = self.context.get('request') and self.context['request'].user
+        if user and user.is_authenticated:
             if hasattr(obj, 'user_progress'):
                 return len(obj.user_progress) > 0
             return UserProgress.objects.filter(user=user, lesson=obj, is_completed=True).exists()
         return False
 
     def get_user_note(self, obj):
-        user = self.context['request'].user
-        if user.is_authenticated:
+        user = self.context.get('request') and self.context['request'].user
+        if user and user.is_authenticated:
             if hasattr(obj, 'user_notes'):
-                if obj.user_notes:
-                    return UserNoteSerializer(obj.user_notes[0]).data
-                return None
+                return UserNoteSerializer(obj.user_notes[0]).data if obj.user_notes else None
             note = UserNote.objects.filter(user=user, lesson=obj).first()
-            if note:
-                return UserNoteSerializer(note).data
+            return UserNoteSerializer(note).data if note else None
         return None
 
+
+class ChapterSerializer(serializers.ModelSerializer):
+    lessons = LessonSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Chapter
+        fields = ['id', 'title', 'order', 'lessons']
+
+
 class CourseListSerializer(serializers.ModelSerializer):
+    instructor_display = serializers.SerializerMethodField()
+    lessons_count = serializers.SerializerMethodField()
+
     class Meta:
         model = Course
-        fields = ['id', 'title', 'thumbnail', 'instructor']
+        fields = ['id', 'title', 'thumbnail', 'instructor_display', 'price', 'is_free', 'requires_vip', 'lessons_count']
+
+    def get_instructor_display(self, obj):
+        if obj.instructor:
+            return obj.instructor.full_name or obj.instructor.phone_number
+        return obj.instructor_name or "مدرس آکادمی"
+
+    def get_lessons_count(self, obj):
+        return obj.total_lessons_count
+
 
 class CourseDetailSerializer(serializers.ModelSerializer):
-    lessons = LessonSerializer(many=True, read_only=True)
+    chapters = ChapterSerializer(many=True, read_only=True)
+    lessons = serializers.SerializerMethodField()  # جهت سازگاری ۱۰۰٪ با کلاینت قبلی فلاتر
     progress_percentage = serializers.SerializerMethodField()
+    instructor_display = serializers.SerializerMethodField()
+    is_enrolled = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
-        fields = ['id', 'title', 'description', 'thumbnail', 'instructor', 'progress_percentage', 'lessons']
+        fields = [
+            'id', 'title', 'description', 'thumbnail', 'price', 'is_free', 
+            'requires_vip', 'instructor_display', 'progress_percentage', 
+            'is_enrolled', 'chapters', 'lessons'
+        ]
+
+    def get_instructor_display(self, obj):
+        if obj.instructor:
+            return obj.instructor.full_name or obj.instructor.phone_number
+        return obj.instructor_name or "مدرس آکادمی"
+
+    def get_lessons(self, obj):
+        # جهت جلوگیری از کرش فلاتر، تمام جلسات فصل‌ها را در قالب یک لیست صاف هم ارائه می‌دهیم
+        all_lessons = Lesson.objects.filter(chapter__course=obj).order_by('chapter__order', 'order')
+        return LessonSerializer(all_lessons, many=True, context=self.context).data
 
     def get_progress_percentage(self, obj):
-        user = self.context['request'].user
-        if user.is_authenticated:
-            lessons = obj.lessons.all()
-            total_lessons = len(lessons)
-            
+        user = self.context.get('request') and self.context['request'].user
+        if user and user.is_authenticated:
+            total_lessons = Lesson.objects.filter(chapter__course=obj).count()
             if total_lessons == 0:
                 return 0
-            
-            if all(hasattr(l, 'user_progress') for l in lessons):
-                completed_lessons = sum(1 for l in lessons if len(l.user_progress) > 0)
-            else:
-                completed_lessons = UserProgress.objects.filter(user=user, lesson__course=obj, is_completed=True).count()
-            
-            return int((completed_lessons / total_lessons) * 100)
+            completed = UserProgress.objects.filter(user=user, lesson__chapter__course=obj, is_completed=True).count()
+            return int((completed / total_lessons) * 100)
         return 0
 
+    def get_is_enrolled(self, obj):
+        user = self.context.get('request') and self.context['request'].user
+        if user and user.is_authenticated:
+            return CourseEnrollment.objects.filter(user=user, course=obj).exists()
+        return False
 
-# ==========================================
-# سریالایزر جدید برای "دوره‌های من"
-# ==========================================
+
 class MyCourseSerializer(serializers.ModelSerializer):
     progress = serializers.SerializerMethodField()
     modules_text = serializers.SerializerMethodField()
@@ -77,29 +110,17 @@ class MyCourseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Course
-        # فیلدها دقیقاً منطبق با مدل فلاتر شما تنظیم شده‌اند
         fields = ['id', 'title', 'description', 'progress', 'modules_text', 'status', 'is_completed']
 
     def _calculate_progress(self, obj):
-        """متد کمکی برای محاسبه تعداد کل و تعداد تکمیل شده"""
-        lessons = obj.lessons.all()
-        total_lessons = len(lessons)
-        
+        user = self.context['request'].user
+        total_lessons = Lesson.objects.filter(chapter__course=obj).count()
         if total_lessons == 0:
             return 0, 0
-        
-        # از آنجایی که در View از prefetch_related استفاده می‌کنیم، دیتابیس درگیر نمی‌شود
-        if all(hasattr(l, 'user_progress') for l in lessons):
-            completed_lessons = sum(1 for l in lessons if len(l.user_progress) > 0)
-        else:
-            # Fallback
-            user = self.context['request'].user
-            completed_lessons = UserProgress.objects.filter(user=user, lesson__course=obj, is_completed=True).count()
-            
+        completed_lessons = UserProgress.objects.filter(user=user, lesson__chapter__course=obj, is_completed=True).count()
         return completed_lessons, total_lessons
 
     def get_progress(self, obj):
-        # فلاتر این عدد را به صورت اعشاری (0.0 تا 1.0) نیاز دارد
         completed, total = self._calculate_progress(obj)
         if total == 0:
             return 0.0
@@ -121,9 +142,10 @@ class MyCourseSerializer(serializers.ModelSerializer):
         completed, total = self._calculate_progress(obj)
         return total > 0 and completed == total
 
+
 class CertificateSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
-    
+
     class Meta:
         model = Certificate
         fields = ['id', 'cert_id', 'course_title', 'issued_at', 'image']
